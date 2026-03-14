@@ -5,16 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 void main() {
-  runApp(const PetHealthTrackerApp());
+  runApp(const DogHealthTrackerApp());
 }
 
-class PetHealthTrackerApp extends StatelessWidget {
-  const PetHealthTrackerApp({super.key});
+class DogHealthTrackerApp extends StatelessWidget {
+  const DogHealthTrackerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pet Health Tracker',
+      title: 'Dog Health Tracker',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -278,7 +278,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
                 const Icon(Icons.pets, size: 62, color: Color(0xFF0C8A7C)),
                 const SizedBox(height: 16),
                 Text(
-                  'Pet Health Tracker',
+                  'Dog Health Tracker',
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.1,
@@ -400,14 +400,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pet Health Tracker'),
-        actions: [
-          IconButton(
-            tooltip: 'Reset aplikácie',
-            onPressed: _resetAll,
-            icon: const Icon(Icons.restart_alt),
-          ),
-        ],
+        title: const Text('Dog Health Tracker'),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 90),
@@ -481,7 +474,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
                 if (dog.birthDate != null) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'Dátum narodenia: ${_formatDate(dog.birthDate!)} (${_formatWeeksSk(_ageInWeeks(dog.birthDate!))})',
+                    'Dátum narodenia: ${_formatDate(dog.birthDate!)} (${_formatAgeSk(dog.birthDate!)})',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.92),
                     ),
@@ -1115,146 +1108,6 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     }
   }
 
-  Future<void> _editPuppyTemplateFlow(DogProfile dog) async {
-    final templateIndexes = <int>[];
-    for (var i = 0; i < dog.records.length; i++) {
-      if (dog.records[i].note == _puppyTemplateNote) {
-        templateIndexes.add(i);
-      }
-    }
-    if (templateIndexes.isEmpty) {
-      return;
-    }
-    templateIndexes.sort(
-      (a, b) => dog.records[a].date.compareTo(dog.records[b].date),
-    );
-
-    final selectedRecord = await showModalBottomSheet<HealthRecord>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text('Vyber úkon šablóny'),
-              subtitle: Text('Po úprave sa nasledujúce úkony prerátajú.'),
-            ),
-            ...templateIndexes.map((idx) {
-              final record = dog.records[idx];
-              return ListTile(
-                title: Text(record.title),
-                subtitle: Text(_formatDate(record.date)),
-                onTap: () => Navigator.of(context).pop(record),
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-
-    if (selectedRecord == null || !mounted) {
-      return;
-    }
-
-    final titleController = TextEditingController(text: selectedRecord.title);
-    var selectedDate = selectedRecord.date;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Upraviť úkon šablóny'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: const InputDecoration(labelText: 'Názov úkonu'),
-              ),
-              const SizedBox(height: 10),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Dátum úkonu'),
-                subtitle: Text(_formatDate(selectedDate)),
-                trailing:
-                    const Icon(Icons.calendar_today_outlined, size: 18),
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: selectedDate,
-                    firstDate: DateTime(2010),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked == null || !context.mounted) {
-                    return;
-                  }
-                  setDialogState(() {
-                    selectedDate = DateTime(
-                      picked.year,
-                      picked.month,
-                      picked.day,
-                    );
-                  });
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Zrušiť'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Uložiť'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (confirmed != true || !mounted) {
-      titleController.dispose();
-      return;
-    }
-
-    final newTitle = titleController.text.trim();
-    titleController.dispose();
-    if (newTitle.isEmpty) {
-      return;
-    }
-
-    final selectedSortedIndex = templateIndexes.indexWhere(
-      (idx) => identical(dog.records[idx], selectedRecord),
-    );
-    if (selectedSortedIndex == -1) {
-      return;
-    }
-
-    final oldBaseDate = dog.records[templateIndexes[selectedSortedIndex]].date;
-
-    setState(() {
-      for (var i = selectedSortedIndex; i < templateIndexes.length; i++) {
-        final idx = templateIndexes[i];
-        final oldRecord = dog.records[idx];
-        final oldOffsetDays = oldRecord.date.difference(oldBaseDate).inDays;
-        final recalculatedDate = i == selectedSortedIndex
-            ? _dateOnly(selectedDate)
-            : _dateOnly(selectedDate.add(Duration(days: oldOffsetDays)));
-
-        dog.records[idx] = HealthRecord(
-          title: i == selectedSortedIndex ? newTitle : oldRecord.title,
-          type: oldRecord.type,
-          date: recalculatedDate,
-          completed: oldRecord.completed,
-          note: oldRecord.note,
-        );
-      }
-      _recalculateLastVaccination(dog);
-    });
-    _persist();
-  }
-
   Future<void> _deleteDogFlow(DogProfile dog) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1855,6 +1708,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     if (dog.lastVaccinationDate == null ||
         vaccinationDate.isAfter(dog.lastVaccinationDate!)) {
       dog.lastVaccinationDate = vaccinationDate;
+      _ensureDogTypeByAge(dog);
       _syncAnnualRevaccinationRecord(dog);
       _syncPreVaccinationDewormingRecords(dog);
       _syncReminderRecords(dog);
@@ -1862,6 +1716,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
   }
 
   void _recalculateLastVaccination(DogProfile dog) {
+    _ensureDogTypeByAge(dog);
     // Vylucime 'Preočkovanie po roku' z vypoctu - je to auto-generovany zaznam
     final vaccinations = dog.records
         .where(
@@ -1928,8 +1783,34 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     _persist();
   }
 
+  bool _ensureDogTypeByAge(DogProfile dog) {
+    if (dog.type != DogType.puppy || dog.birthDate == null) {
+      return false;
+    }
+    final oneYearDate = DateTime(
+      dog.birthDate!.year + 1,
+      dog.birthDate!.month,
+      dog.birthDate!.day,
+    );
+    if (!_dateOnly(DateTime.now()).isBefore(_dateOnly(oneYearDate))) {
+      dog.type = DogType.adult;
+      return true;
+    }
+    return false;
+  }
+
+  void _syncDogSchedule(DogProfile dog) {
+    _ensureDogTypeByAge(dog);
+    _syncAnnualRevaccinationRecord(dog);
+    _syncPreVaccinationDewormingRecords(dog);
+    _syncReminderRecords(dog);
+  }
+
   void _syncAnnualRevaccinationRecord(DogProfile dog) {
     if (dog.lastVaccinationDate == null) {
+      dog.records.removeWhere(
+        (record) => record.title == _annualRevaccinationTitle,
+      );
       return;
     }
     final annualDate = _annualFrom(dog.lastVaccinationDate!);
@@ -1999,15 +1880,10 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     return next;
   }
 
-  void _resetAll() {
-    setState(() {
-      _dogs.clear();
-      _selectedDogId = null;
-    });
-    _persist();
-  }
-
   void _persist() {
+    for (final dog in _dogs) {
+      _syncDogSchedule(dog);
+    }
     _saveStateToAndroid();
     _scheduleNativeNotifications();
   }
@@ -2095,9 +1971,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
           ),
         );
       for (final dog in _dogs) {
-        _syncAnnualRevaccinationRecord(dog);
-        _syncPreVaccinationDewormingRecords(dog);
-        _syncReminderRecords(dog);
+        _syncDogSchedule(dog);
       }
       _selectedDogId = decoded['selectedDogId'] as String?;
       if (_dogs.isNotEmpty &&
@@ -2174,11 +2048,34 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
   }
 
   int _ageInWeeks(DateTime birthDate) {
-    final days = DateTime.now().difference(birthDate).inDays;
+    final days = DateTime.now().difference(_dateOnly(birthDate)).inDays;
     if (days <= 0) {
       return 0;
     }
     return days ~/ 7;
+  }
+
+  String _formatAgeSk(DateTime birthDate) {
+    final now = _dateOnly(DateTime.now());
+    final birth = _dateOnly(birthDate);
+    if (!now.isAfter(birth)) {
+      return '0 týždňov';
+    }
+
+    final totalMonths = (now.year - birth.year) * 12 + now.month - birth.month - (now.day < birth.day ? 1 : 0);
+    if (totalMonths < 3) {
+      return _formatWeeksSk(_ageInWeeks(birthDate));
+    }
+
+    if (totalMonths < 12) {
+      return _formatMonthsSk(totalMonths);
+    }
+
+    var years = now.year - birth.year;
+    if (now.month < birth.month || (now.month == birth.month && now.day < birth.day)) {
+      years--;
+    }
+    return _formatYearsSk(years);
   }
 
   String _formatWeeksSk(int weeks) {
@@ -2194,6 +2091,36 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
       return '$weeks týždne';
     }
     return '$weeks týždňov';
+  }
+
+  String _formatMonthsSk(int months) {
+    final mod100 = months % 100;
+    final mod10 = months % 10;
+    if (mod100 >= 11 && mod100 <= 14) {
+      return '$months mesiacov';
+    }
+    if (mod10 == 1) {
+      return '$months mesiac';
+    }
+    if (mod10 >= 2 && mod10 <= 4) {
+      return '$months mesiace';
+    }
+    return '$months mesiacov';
+  }
+
+  String _formatYearsSk(int years) {
+    final mod100 = years % 100;
+    final mod10 = years % 10;
+    if (mod100 >= 11 && mod100 <= 14) {
+      return '$years rokov';
+    }
+    if (mod10 == 1) {
+      return '$years rok';
+    }
+    if (mod10 >= 2 && mod10 <= 4) {
+      return '$years roky';
+    }
+    return '$years rokov';
   }
 
   String _formatDate(DateTime date) {

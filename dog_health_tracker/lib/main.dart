@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 void main() async {
@@ -27,29 +26,32 @@ class PetTypeSelectionScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: Text('Vyber typ psa')),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              child: Text('Šteniatko'),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => HomeScreen(isPuppy: true)),
-                );
-              },
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              child: Text('Dospelý pes'),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => HomeScreen(isPuppy: false)),
-                );
-              },
-            ),
-          ],
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                child: Text('Šteniatko'),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => HomeScreen(isPuppy: true)),
+                  );
+                },
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                child: Text('Dospelý pes'),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => HomeScreen(isPuppy: false)),
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -195,6 +197,7 @@ class RecordDetailScreen extends StatelessWidget {
     );
   }
 }
+
 
 @HiveType(typeId: 0)
 class PetRecord extends HiveObject {

@@ -1,0 +1,9 @@
+void _resetAll() {
+  setState(() {
+    _dogs.clear();
+    _selectedDogId = null;
+  });
+  _persist();
+}
+
+// If needed for testing, restore this method and wire it to a button or debug action.
