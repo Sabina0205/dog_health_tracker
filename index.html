@@ -6,7 +6,10 @@
 <title>Dog Health Tracker</title>
 <link rel="icon" href="./img/paw_clean.png" type="image/png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" integrity="sha512-..." crossorigin="anonymous" referrerpolicy="no-referrer" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+<script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+
 <style>
 * { margin:0; padding:0; box-sizing:border-box; font-family:'Poppins',sans-serif; }
 body { background: #0C8A7C; color:white; }
@@ -105,24 +108,20 @@ footer { padding:40px 20px; font-size:0.9rem; opacity:0.8; text-align:center; }
 <body>
 
 <header>
-  <!-- Logo -->
   <div class="header-logo">
     <div>
       <img src="./img/paw_clean.png" alt="Logo Pet Health Tracker">
     </div>
   </div>
 
-  <!-- Hero -->
-  <h1>Pet Health Tracker</h1>
+  <h1>Dog Health Tracker</h1>
   <p class="subtitle">Sleduj zdravie svojho miláčika jednoducho, prehľadne a s láskou 🐕✨</p>
 
-  <!-- Download APK -->
   <a href="https://github.com/Sabina0205/dog_health_tracker/releases/download/v1.0.0/app-release.apk" class="btn-download" target="_blank">
     <i class="fa-brands fa-android"></i> Stiahnuť APK
   </a>
 </header>
 
-<!-- Features -->
 <section class="features">
   <h2>Funkcie aplikácie</h2>
   <div class="features-container">
@@ -149,7 +148,6 @@ footer { padding:40px 20px; font-size:0.9rem; opacity:0.8; text-align:center; }
   </div>
 </section>
 
-<!-- Screenshots -->
 <section class="screenshots">
   <h2>Náhľad aplikácie 👀</h2>
   <div class="screenshot-container">
@@ -165,11 +163,12 @@ footer { padding:40px 20px; font-size:0.9rem; opacity:0.8; text-align:center; }
   </div>
 </section>
 
-<!-- Contact -->
 <section class="contact">
   <h2>Kontaktuj nás</h2>
   <p>Pre otázky alebo spätnú väzbu nám napíš na <a href="mailto:stefkova.sabina@outlook.cz" style="color:white; text-decoration:underline;">stefkova.sabina@outlook.cz</a></p>
-  <form action="mailto:stefkova.sabina@outlook.cz" method="post" enctype="text/plain">
+
+  <!-- ✅ UPRAVENÝ FORM (len toto sa menilo) -->
+  <form id="contact-form">
     <input type="text" name="name" placeholder="Tvoje meno" required>
     <input type="email" name="email" placeholder="Tvoj e-mail" required>
     <textarea name="message" placeholder="Správa" required></textarea>
@@ -180,6 +179,28 @@ footer { padding:40px 20px; font-size:0.9rem; opacity:0.8; text-align:center; }
 <footer>
   © 2026 Dog Health Tracker 💚 Vytvorené s láskou pre všetkých milovníkov zvieratiek 🐕🐈
 </footer>
+
+<!-- ✅ PRIDANÝ SCRIPT -->
+<script>
+(function(){
+  emailjs.init("YOUR_PUBLIC_KEY");
+})();
+
+document.getElementById("contact-form").addEventListener("submit", function(e) {
+  e.preventDefault();
+
+  emailjs.sendForm(
+    "YOUR_SERVICE_ID",
+    "YOUR_TEMPLATE_ID",
+    this
+  ).then(function() {
+    alert("Správa bola odoslaná ✅");
+  }, function(error) {
+    alert("Chyba pri odoslaní ❌");
+    console.log(error);
+  });
+});
+</script>
 
 </body>
 </html>
