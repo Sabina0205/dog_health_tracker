@@ -2186,10 +2186,11 @@ class _AddDogPageState extends State<AddDogPage> {
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return Scaffold(
       appBar: AppBar(title: const Text('Pridať psa')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, 24 + bottomInset),
         children: [
           DropdownButtonFormField<DogType>(
             initialValue: _selectedType,
