@@ -904,7 +904,13 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     final id = DateTime.now().microsecondsSinceEpoch.toString();
     final resolvedName =
         draft.name.isEmpty ? 'Pes ${_dogs.length + 1}' : draft.name;
-    final selectedDate = _dateOnly(draft.date);
+    var selectedDate = _dateOnly(draft.date);
+    if (draft.type == DogType.adult) {
+      selectedDate = await _resolveAdultVaccinationDate(selectedDate);
+      if (!mounted) {
+        return;
+      }
+    }
     final dog = draft.type == DogType.puppy
         ? _createPuppyDog(
             id: id,
@@ -928,6 +934,56 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
       _selectedDogId = dog.id;
     });
     _persist();
+  }
+
+  Future<DateTime> _resolveAdultVaccinationDate(DateTime selectedDate) async {
+    if (!_isVaccinationExpired(selectedDate)) {
+      return selectedDate;
+    }
+
+    final useNewDate = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Očkovanie je prepadnuté'),
+        content: Text(
+          'Posledné očkovanie (${_formatDate(selectedDate)}) je staršie ako 1 rok. '
+          'Odporúčame doplniť nový dátum očkovania.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Ponechať dátum'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Doplniť dátum'),
+          ),
+        ],
+      ),
+    );
+
+    if (useNewDate != true || !mounted) {
+      return selectedDate;
+    }
+
+    final today = _dateOnly(DateTime.now());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today,
+      firstDate: selectedDate,
+      lastDate: today,
+      helpText: 'Dátum doplneného očkovania',
+    );
+    if (picked == null) {
+      return selectedDate;
+    }
+    return _dateOnly(picked);
+  }
+
+  bool _isVaccinationExpired(DateTime lastVaccinationDate) {
+    final nextDue = _annualFrom(lastVaccinationDate);
+    final today = _dateOnly(DateTime.now());
+    return !nextDue.isAfter(today);
   }
 
   Widget _buildDogAvatar(
@@ -1871,12 +1927,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
   }
 
   DateTime _annualFrom(DateTime date) {
-    final today = _dateOnly(DateTime.now());
-    var next = date.add(const Duration(days: 365));
-    while (!next.isAfter(today)) {
-      next = next.add(const Duration(days: 365));
-    }
-    return next;
+    return _dateOnly(date).add(const Duration(days: 365));
   }
 
   void _persist() {
