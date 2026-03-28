@@ -58,6 +58,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "getCurrentLocation" -> handleGetCurrentLocation(result)
                 "openMapSearch" -> handleOpenMapSearch(call.arguments, result)
+                "openExternalUrl" -> handleOpenExternalUrl(call.arguments, result)
                 "openDialer" -> handleOpenDialer(call.arguments, result)
                 else -> result.notImplemented()
             }
@@ -389,6 +390,28 @@ class MainActivity : FlutterActivity() {
             result.success(null)
         } catch (error: Exception) {
             result.error("dialer_open_failed", error.localizedMessage, null)
+        }
+    }
+
+    private fun handleOpenExternalUrl(arguments: Any?, result: MethodChannel.Result) {
+        val url = (arguments as? Map<*, *>)?.get("url") as? String
+        if (url.isNullOrBlank()) {
+            result.error("missing_url", "URL is required.", null)
+            return
+        }
+
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse(url),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(intent)
+            result.success(null)
+        } catch (error: Exception) {
+            result.error("url_open_failed", error.localizedMessage, null)
         }
     }
 

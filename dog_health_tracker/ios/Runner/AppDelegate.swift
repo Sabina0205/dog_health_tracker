@@ -68,6 +68,36 @@ import UIKit
             }
           }
 
+        case "openExternalUrl":
+          guard
+            let args = call.arguments as? [String: Any],
+            let urlString = args["url"] as? String,
+            let url = URL(string: urlString)
+          else {
+            result(
+              FlutterError(
+                code: "missing_url",
+                message: "URL is required.",
+                details: nil
+              )
+            )
+            return
+          }
+
+          UIApplication.shared.open(url, options: [:]) { success in
+            if success {
+              result(nil)
+            } else {
+              result(
+                FlutterError(
+                  code: "url_open_failed",
+                  message: "Unable to open URL.",
+                  details: nil
+                )
+              )
+            }
+          }
+
         case "openDialer":
           guard
             let args = call.arguments as? [String: Any],

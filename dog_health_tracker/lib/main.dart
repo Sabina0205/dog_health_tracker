@@ -2556,6 +2556,16 @@ class VetPlace {
   final double distanceKm;
 }
 
+const List<({String name, String address, double latitude, double longitude})>
+    _guaranteedVets = [
+  (
+    name: 'Veterinárna ambulancia',
+    address: 'Dukelská štvrť 1402, 018 41 Dubnica nad Váhom',
+    latitude: 48.9708125,
+    longitude: 18.1888125,
+  ),
+];
+
 class NearbyVetsPage extends StatefulWidget {
   const NearbyVetsPage({super.key});
 
@@ -2567,6 +2577,13 @@ class _NearbyVetsPageState extends State<NearbyVetsPage> {
   bool _isLoading = false;
   String? _errorMessage;
   List<VetPlace> _vets = const [];
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   Future<void> _loadNearbyVets() async {
     setState(() {
@@ -2608,22 +2625,58 @@ class _NearbyVetsPageState extends State<NearbyVetsPage> {
     }
   }
 
-  Future<List<VetPlace>> _fetchNearbyVets(
-    double latitude,
-    double longitude,
-  ) async {
-    final overpassQuery = '''
-[out:json][timeout:25];
-(
-  node["amenity"="veterinary"](around:12000,$latitude,$longitude);
-  way["amenity"="veterinary"](around:12000,$latitude,$longitude);
-  relation["amenity"="veterinary"](around:12000,$latitude,$longitude);
-);
-out center tags;
-''';
+  Future<void> _searchNearbyVetsByQuery() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) {
+      setState(() {
+        _errorMessage = 'Zadaj mesto alebo adresu.';
+      });
+      return;
+    }
 
-    final uri = Uri.https('overpass-api.de', '/api/interpreter', {
-      'data': overpassQuery,
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final coordinates = await _geocodeLocation(query);
+      if (coordinates == null) {
+        throw Exception('Miesto sa nepodarilo nájsť.');
+      }
+
+      final vets = await _fetchNearbyVets(
+        coordinates.$1,
+        coordinates.$2,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _vets = vets;
+        _isLoading = false;
+        _errorMessage = vets.isEmpty
+            ? 'Pre zadané miesto sa nenašli žiadni veterinári.'
+            : null;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isLoading = false;
+        _errorMessage =
+            'Nepodarilo sa nájsť zadané miesto alebo veterinárov v okolí.';
+      });
+    }
+  }
+
+  Future<(double, double)?> _geocodeLocation(String query) async {
+    final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+      'q': query,
+      'format': 'jsonv2',
+      'limit': '1',
+      'countrycodes': 'sk',
     });
 
     final client = HttpClient();
@@ -2634,32 +2687,123 @@ out center tags;
       final response = await request.close();
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException(
-          'Overpass request failed with status ${response.statusCode}',
+          'Nominatim request failed with status ${response.statusCode}',
         );
       }
 
       final body = await response.transform(utf8.decoder).join();
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      final elements = data['elements'] as List<dynamic>? ?? const [];
+      final results = jsonDecode(body) as List<dynamic>;
+      if (results.isEmpty) {
+        return null;
+      }
 
-      final vets = elements
-          .map((item) => _vetFromMap(item as Map<String, dynamic>, latitude, longitude))
-          .whereType<VetPlace>()
-          .fold<List<VetPlace>>([], (items, vet) {
-            final exists = items.any(
-              (item) => item.name == vet.name && item.address == vet.address,
-            );
-            if (!exists) {
-              items.add(vet);
-            }
-            return items;
-          })
-        ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+      final first = results.first as Map<String, dynamic>;
+      final latitude = double.tryParse(first['lat'] as String? ?? '');
+      final longitude = double.tryParse(first['lon'] as String? ?? '');
+      if (latitude == null || longitude == null) {
+        return null;
+      }
 
-      return vets.take(12).toList();
+      return (latitude, longitude);
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<List<VetPlace>> _fetchNearbyVets(
+    double latitude,
+    double longitude,
+  ) async {
+    final overpassQuery = '''
+[out:json][timeout:25];
+(
+  node["amenity"="veterinary"](around:18000,$latitude,$longitude);
+  way["amenity"="veterinary"](around:18000,$latitude,$longitude);
+  relation["amenity"="veterinary"](around:18000,$latitude,$longitude);
+  node["healthcare"="veterinary"](around:18000,$latitude,$longitude);
+  way["healthcare"="veterinary"](around:18000,$latitude,$longitude);
+  relation["healthcare"="veterinary"](around:18000,$latitude,$longitude);
+);
+out center tags;
+''';
+
+    final uris = [
+      Uri.https('overpass-api.de', '/api/interpreter', {
+        'data': overpassQuery,
+      }),
+      Uri.https('maps.mail.ru', '/osm/tools/overpass/api/interpreter', {
+        'data': overpassQuery,
+      }),
+    ];
+
+    List<dynamic> elements = const [];
+    Object? lastError;
+
+    for (final uri in uris) {
+      try {
+        final data = await _getJsonMap(uri);
+        elements = data['elements'] as List<dynamic>? ?? const [];
+        if (elements.isNotEmpty) {
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (elements.isEmpty && lastError != null) {
+      throw lastError;
+    }
+
+    final vets = elements
+        .map(
+          (item) => _vetFromMap(
+            item as Map<String, dynamic>,
+            latitude,
+            longitude,
+          ),
+        )
+        .whereType<VetPlace>()
+        .fold<List<VetPlace>>([], (items, vet) {
+          final exists = items.any(
+            (item) => item.name == vet.name && item.address == vet.address,
+          );
+          if (!exists) {
+            items.add(vet);
+          }
+          return items;
+        });
+
+    for (final guaranteedVet in _guaranteedVets) {
+      final distanceKm = _distanceKm(
+        latitude,
+        longitude,
+        guaranteedVet.latitude,
+        guaranteedVet.longitude,
+      );
+      final isNearbySearch = distanceKm <= 25;
+      final alreadyIncluded = vets.any(
+        (item) =>
+            item.name == guaranteedVet.name &&
+            item.address == guaranteedVet.address,
+      );
+
+      if (isNearbySearch && !alreadyIncluded) {
+        vets.add(
+          VetPlace(
+            name: guaranteedVet.name,
+            address: guaranteedVet.address,
+            latitude: guaranteedVet.latitude,
+            longitude: guaranteedVet.longitude,
+            distanceKm: distanceKm,
+          ),
+        );
+      }
+    }
+
+    vets.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+
+    return vets.take(12).toList();
   }
 
   VetPlace? _vetFromMap(
@@ -2680,11 +2824,7 @@ out center tags;
       return null;
     }
 
-    final name = (tags['name'] as String?)?.trim();
-    if (name == null || name.isEmpty) {
-      return null;
-    }
-
+    final name = _buildVetName(tags);
     final address = _buildVetAddress(tags);
     final distanceKm = _distanceKm(
       userLatitude,
@@ -2729,6 +2869,24 @@ out center tags;
     return parts.join(', ');
   }
 
+  String _buildVetName(Map<String, dynamic> tags) {
+    final candidates = [
+      tags['name'],
+      tags['official_name'],
+      tags['operator'],
+      tags['brand'],
+    ];
+
+    for (final candidate in candidates) {
+      final value = (candidate as String?)?.trim();
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+
+    return 'Veterinárna ambulancia';
+  }
+
   double _distanceKm(
     double startLat,
     double startLon,
@@ -2752,6 +2910,23 @@ out center tags;
     return degrees * math.pi / 180;
   }
 
+  Future<Map<String, dynamic>> _getJsonMap(Uri uri) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(uri);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.userAgentHeader, 'DogHealthTracker/1.0');
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException('Request failed with status ${response.statusCode}');
+      }
+      final body = await response.transform(utf8.decoder).join();
+      return jsonDecode(body) as Map<String, dynamic>;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> _openMapsSearch(
     BuildContext context, {
     required String query,
@@ -2759,6 +2934,23 @@ out center tags;
     try {
       await _externalChannel.invokeMethod<void>('openMapSearch', {
         'query': query,
+      });
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mapy sa nepodarilo otvoriť.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openMapsUrl(BuildContext context, String url) async {
+    try {
+      await _externalChannel.invokeMethod<void>('openExternalUrl', {
+        'url': url,
       });
     } catch (_) {
       if (!context.mounted) {
@@ -2822,6 +3014,26 @@ out center tags;
                 : const Icon(Icons.my_location),
             label: Text(
               _isLoading ? 'Hľadám veterinárov...' : 'Vyhľadať veterinárov',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _searchController,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) {
+              if (_isLoading) {
+                return;
+              }
+              _searchNearbyVetsByQuery();
+            },
+            decoration: InputDecoration(
+              labelText: 'Mesto alebo adresa',
+              hintText: 'napr. Dubnica nad Váhom alebo Továrenská 10',
+              suffixIcon: IconButton(
+                onPressed: _isLoading ? null : _searchNearbyVetsByQuery,
+                icon: const Icon(Icons.search),
+                tooltip: 'Hľadať podľa miesta',
+              ),
             ),
           ),
           if (_errorMessage != null) ...[
