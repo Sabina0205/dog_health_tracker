@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+const MethodChannel _externalChannel = MethodChannel('pet_health/external');
 
 void main() {
   runApp(const DogHealthTrackerApp());
@@ -578,6 +581,8 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
             ),
           ],
           const SizedBox(height: 14),
+          _buildNearbyVetsCard(),
+          const SizedBox(height: 14),
           Row(
             children: [
               Text(
@@ -772,6 +777,60 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
         icon: const Icon(Icons.add),
         label: const Text('Pridať úkon'),
       ),
+    );
+  }
+
+  Widget _buildNearbyVetsCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE0F4F1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                Icons.local_hospital_outlined,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Veterinári v okolí',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Otvor rýchle vyhľadanie veterinárnych ambulancií vo svojom okolí.',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton.icon(
+              onPressed: _openNearbyVetsPage,
+              icon: const Icon(Icons.search),
+              label: const Text('Nájsť'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openNearbyVetsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const NearbyVetsPage()),
     );
   }
 
@@ -2478,6 +2537,391 @@ class _AddDogPageState extends State<AddDogPage> {
     final month = date.month.toString().padLeft(2, '0');
     final year = date.year.toString();
     return '$day.$month.$year';
+  }
+}
+
+class VetPlace {
+  const VetPlace({
+    required this.name,
+    required this.address,
+    required this.latitude,
+    required this.longitude,
+    required this.distanceKm,
+  });
+
+  final String name;
+  final String address;
+  final double latitude;
+  final double longitude;
+  final double distanceKm;
+}
+
+class NearbyVetsPage extends StatefulWidget {
+  const NearbyVetsPage({super.key});
+
+  @override
+  State<NearbyVetsPage> createState() => _NearbyVetsPageState();
+}
+
+class _NearbyVetsPageState extends State<NearbyVetsPage> {
+  bool _isLoading = false;
+  String? _errorMessage;
+  List<VetPlace> _vets = const [];
+
+  Future<void> _loadNearbyVets() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final location = await _externalChannel.invokeMapMethod<String, dynamic>(
+        'getCurrentLocation',
+      );
+      final latitude = (location?['latitude'] as num?)?.toDouble();
+      final longitude = (location?['longitude'] as num?)?.toDouble();
+
+      if (latitude == null || longitude == null) {
+        throw Exception('Nepodarilo sa získať polohu.');
+      }
+
+      final vets = await _fetchNearbyVets(latitude, longitude);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _vets = vets;
+        _isLoading = false;
+        _errorMessage = vets.isEmpty
+            ? 'V okolí sa nenašli žiadni veterinári.'
+            : null;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isLoading = false;
+        _errorMessage =
+            'Nepodarilo sa nájsť veterinárov. Skontroluj polohu a internet.';
+      });
+    }
+  }
+
+  Future<List<VetPlace>> _fetchNearbyVets(
+    double latitude,
+    double longitude,
+  ) async {
+    final overpassQuery = '''
+[out:json][timeout:25];
+(
+  node["amenity"="veterinary"](around:12000,$latitude,$longitude);
+  way["amenity"="veterinary"](around:12000,$latitude,$longitude);
+  relation["amenity"="veterinary"](around:12000,$latitude,$longitude);
+);
+out center tags;
+''';
+
+    final uri = Uri.https('overpass-api.de', '/api/interpreter', {
+      'data': overpassQuery,
+    });
+
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(uri);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.userAgentHeader, 'DogHealthTracker/1.0');
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException(
+          'Overpass request failed with status ${response.statusCode}',
+        );
+      }
+
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final elements = data['elements'] as List<dynamic>? ?? const [];
+
+      final vets = elements
+          .map((item) => _vetFromMap(item as Map<String, dynamic>, latitude, longitude))
+          .whereType<VetPlace>()
+          .fold<List<VetPlace>>([], (items, vet) {
+            final exists = items.any(
+              (item) => item.name == vet.name && item.address == vet.address,
+            );
+            if (!exists) {
+              items.add(vet);
+            }
+            return items;
+          })
+        ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+
+      return vets.take(12).toList();
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  VetPlace? _vetFromMap(
+    Map<String, dynamic> item,
+    double userLatitude,
+    double userLongitude,
+  ) {
+    final tags = item['tags'] as Map<String, dynamic>? ?? const {};
+    final center = item['center'] as Map<String, dynamic>?;
+    final latitude =
+        (item['lat'] as num?)?.toDouble() ??
+        (center?['lat'] as num?)?.toDouble();
+    final longitude =
+        (item['lon'] as num?)?.toDouble() ??
+        (center?['lon'] as num?)?.toDouble();
+
+    if (latitude == null || longitude == null) {
+      return null;
+    }
+
+    final name = (tags['name'] as String?)?.trim();
+    if (name == null || name.isEmpty) {
+      return null;
+    }
+
+    final address = _buildVetAddress(tags);
+    final distanceKm = _distanceKm(
+      userLatitude,
+      userLongitude,
+      latitude,
+      longitude,
+    );
+
+    return VetPlace(
+      name: name,
+      address: address,
+      latitude: latitude,
+      longitude: longitude,
+      distanceKm: distanceKm,
+    );
+  }
+
+  String _buildVetAddress(Map<String, dynamic> tags) {
+    final street = (tags['addr:street'] as String?)?.trim();
+    final houseNumber = (tags['addr:housenumber'] as String?)?.trim();
+    final city = (tags['addr:city'] as String?)?.trim();
+    final full = (tags['addr:full'] as String?)?.trim();
+
+    if (full != null && full.isNotEmpty) {
+      return full;
+    }
+
+    final firstLine = [
+      if (street != null && street.isNotEmpty) street,
+      if (houseNumber != null && houseNumber.isNotEmpty) houseNumber,
+    ].join(' ');
+
+    final parts = [
+      if (firstLine.isNotEmpty) firstLine,
+      if (city != null && city.isNotEmpty) city,
+    ];
+
+    if (parts.isEmpty) {
+      return 'Adresa nie je dostupná';
+    }
+
+    return parts.join(', ');
+  }
+
+  double _distanceKm(
+    double startLat,
+    double startLon,
+    double endLat,
+    double endLon,
+  ) {
+    const earthRadiusKm = 6371.0;
+    final latDelta = _degreesToRadians(endLat - startLat);
+    final lonDelta = _degreesToRadians(endLon - startLon);
+    final a =
+        math.sin(latDelta / 2) * math.sin(latDelta / 2) +
+        math.cos(_degreesToRadians(startLat)) *
+            math.cos(_degreesToRadians(endLat)) *
+            math.sin(lonDelta / 2) *
+            math.sin(lonDelta / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadiusKm * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * math.pi / 180;
+  }
+
+  Future<void> _openMapsSearch(
+    BuildContext context, {
+    required String query,
+  }) async {
+    try {
+      await _externalChannel.invokeMethod<void>('openMapSearch', {
+        'query': query,
+      });
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mapy sa nepodarilo otvoriť.'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Veterinári v okolí')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF0C8A7C), Color(0xFF4ABAAE)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: const Row(
+              children: [
+                Icon(
+                  Icons.pets,
+                  color: Colors.white,
+                  size: 28,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Rýchle hľadanie veterinárov',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _isLoading ? null : _loadNearbyVets,
+            icon: _isLoading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.my_location),
+            label: Text(
+              _isLoading ? 'Hľadám veterinárov...' : 'Vyhľadať veterinárov',
+            ),
+          ),
+          if (_errorMessage != null) ...[
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(_errorMessage!),
+              ),
+            ),
+          ],
+          if (_vets.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Text(
+              'Nájdené ambulancie',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            ..._vets.map(
+              (vet) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _VetResultCard(
+                  vet: vet,
+                  onOpenMap: () => _openMapsSearch(
+                    context,
+                    query: '${vet.name}, ${vet.address}',
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _VetResultCard extends StatelessWidget {
+  const _VetResultCard({
+    required this.vet,
+    required this.onOpenMap,
+  });
+
+  final VetPlace vet;
+  final VoidCallback onOpenMap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEAF7F5),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                Icons.local_hospital_outlined,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    vet.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(vet.address),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${vet.distanceKm.toStringAsFixed(1)} km',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.tonal(
+                    onPressed: onOpenMap,
+                    child: const Text('Otvoriť v mapách'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

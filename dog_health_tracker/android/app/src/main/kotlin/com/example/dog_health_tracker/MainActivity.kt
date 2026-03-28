@@ -6,8 +6,13 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -16,12 +21,18 @@ import java.io.FileOutputStream
 
 class MainActivity : FlutterActivity() {
     private val storageChannel = "pet_health/storage"
+    private val externalChannel = "pet_health/external"
     private val prefs by lazy {
         getSharedPreferences("pet_health_storage", Context.MODE_PRIVATE)
     }
 
     private var pendingPhotoResult: MethodChannel.Result? = null
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var pendingLocationResult: MethodChannel.Result? = null
+    private var activeLocationManager: LocationManager? = null
+    private var activeLocationListener: LocationListener? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var locationTimeoutRunnable: Runnable? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -36,6 +47,18 @@ class MainActivity : FlutterActivity() {
                 "pickDogPhoto" -> handlePickDogPhoto(result)
                 "requestNotificationPermission" -> handleNotificationPermission(result)
                 "scheduleNotifications" -> handleScheduleNotifications(call.arguments, result)
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            externalChannel,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getCurrentLocation" -> handleGetCurrentLocation(result)
+                "openMapSearch" -> handleOpenMapSearch(call.arguments, result)
+                "openDialer" -> handleOpenDialer(call.arguments, result)
                 else -> result.notImplemented()
             }
         }
@@ -190,6 +213,185 @@ class MainActivity : FlutterActivity() {
         return destination.absolutePath
     }
 
+    private fun handleGetCurrentLocation(result: MethodChannel.Result) {
+        if (pendingLocationResult != null) {
+            result.error(
+                "location_request_in_progress",
+                "Location request is already in progress.",
+                null,
+            )
+            return
+        }
+        pendingLocationResult = result
+
+        if (hasLocationPermission()) {
+            requestCurrentLocation()
+            return
+        }
+
+        requestPermissions(
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ),
+            REQUEST_LOCATION_PERMISSION,
+        )
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        val fineGranted =
+            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        val coarseGranted =
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        return fineGranted || coarseGranted
+    }
+
+    private fun requestCurrentLocation() {
+        val result = pendingLocationResult ?: return
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+        ).filter { provider ->
+            runCatching { locationManager.isProviderEnabled(provider) }.getOrDefault(false)
+        }
+
+        if (providers.isEmpty()) {
+            pendingLocationResult = null
+            result.error(
+                "location_services_disabled",
+                "Location services are disabled.",
+                null,
+            )
+            return
+        }
+
+        val lastKnownLocation = providers
+            .mapNotNull { provider ->
+                runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
+            }
+            .maxByOrNull { location -> location.time }
+
+        if (lastKnownLocation != null && System.currentTimeMillis() - lastKnownLocation.time < 10 * 60 * 1000) {
+            pendingLocationResult = null
+            result.success(locationToMap(lastKnownLocation))
+            return
+        }
+
+        cleanupLocationRequest()
+        pendingLocationResult = result
+        activeLocationManager = locationManager
+
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                val pendingResult = pendingLocationResult ?: return
+                cleanupLocationRequest()
+                pendingLocationResult = null
+                pendingResult.success(locationToMap(location))
+            }
+        }
+
+        activeLocationListener = listener
+
+        try {
+            for (provider in providers) {
+                locationManager.requestLocationUpdates(
+                    provider,
+                    0L,
+                    0f,
+                    listener,
+                    Looper.getMainLooper(),
+                )
+            }
+        } catch (error: SecurityException) {
+            cleanupLocationRequest()
+            pendingLocationResult = null
+            result.error("location_permission_denied", error.localizedMessage, null)
+            return
+        }
+
+        val timeoutRunnable = Runnable {
+            val pendingResult = pendingLocationResult ?: return@Runnable
+            cleanupLocationRequest()
+            pendingLocationResult = null
+            pendingResult.error(
+                "location_timeout",
+                "Timed out while waiting for location.",
+                null,
+            )
+        }
+        locationTimeoutRunnable = timeoutRunnable
+        mainHandler.postDelayed(timeoutRunnable, 12000)
+    }
+
+    private fun cleanupLocationRequest() {
+        locationTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        locationTimeoutRunnable = null
+
+        val manager = activeLocationManager
+        val listener = activeLocationListener
+        if (manager != null && listener != null) {
+            runCatching { manager.removeUpdates(listener) }
+        }
+
+        activeLocationManager = null
+        activeLocationListener = null
+    }
+
+    private fun locationToMap(location: Location): Map<String, Double> {
+        return mapOf(
+            "latitude" to location.latitude,
+            "longitude" to location.longitude,
+        )
+    }
+
+    private fun handleOpenMapSearch(arguments: Any?, result: MethodChannel.Result) {
+        val query = (arguments as? Map<*, *>)?.get("query") as? String
+        if (query.isNullOrBlank()) {
+            result.error("missing_query", "Search query is required.", null)
+            return
+        }
+
+        val encodedQuery = Uri.encode(query)
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("geo:0,0?q=$encodedQuery"),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(intent)
+            result.success(null)
+        } catch (error: Exception) {
+            result.error("map_open_failed", error.localizedMessage, null)
+        }
+    }
+
+    private fun handleOpenDialer(arguments: Any?, result: MethodChannel.Result) {
+        val phoneNumber = (arguments as? Map<*, *>)?.get("phone") as? String
+        if (phoneNumber.isNullOrBlank()) {
+            result.error("missing_phone", "Phone number is required.", null)
+            return
+        }
+
+        val intent = Intent(
+            Intent.ACTION_DIAL,
+            Uri.parse("tel:$phoneNumber"),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(intent)
+            result.success(null)
+        } catch (error: Exception) {
+            result.error("dialer_open_failed", error.localizedMessage, null)
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -226,14 +428,28 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        if (requestCode != REQUEST_NOTIFICATION_PERMISSION) {
-            return
+        when (requestCode) {
+            REQUEST_NOTIFICATION_PERMISSION -> {
+                val result = pendingPermissionResult ?: return
+                pendingPermissionResult = null
+                val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+                result.success(granted)
+            }
+            REQUEST_LOCATION_PERMISSION -> {
+                val result = pendingLocationResult ?: return
+                val granted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+                if (granted) {
+                    requestCurrentLocation()
+                } else {
+                    pendingLocationResult = null
+                    result.error(
+                        "location_permission_denied",
+                        "Location permission was denied.",
+                        null,
+                    )
+                }
+            }
         }
-
-        val result = pendingPermissionResult ?: return
-        pendingPermissionResult = null
-        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        result.success(granted)
     }
 
     private companion object {
@@ -241,5 +457,6 @@ class MainActivity : FlutterActivity() {
         const val KEY_SCHEDULED_NOTIFICATION_IDS = "scheduled_notification_ids"
         const val REQUEST_PICK_DOG_PHOTO = 1001
         const val REQUEST_NOTIFICATION_PERMISSION = 1002
+        const val REQUEST_LOCATION_PERMISSION = 1003
     }
 }
