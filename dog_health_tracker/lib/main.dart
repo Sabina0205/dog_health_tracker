@@ -41,7 +41,7 @@ class DogHealthTrackerApp extends StatelessWidget {
 
 enum DogType { puppy, adult }
 
-enum ProcedureType { vaccination, deworming, medication, checkup, other }
+enum ProcedureType { vaccination, deworming, medication, checkup, grooming, other }
 
 enum RecordFilter { upcoming, all, completed }
 
@@ -52,6 +52,7 @@ class HealthRecord {
     required this.title,
     required this.type,
     required this.date,
+    this.appointmentTimeMinutes,
     this.completed = false,
     this.note = '',
   });
@@ -59,6 +60,7 @@ class HealthRecord {
   String title;
   ProcedureType type;
   DateTime date;
+  int? appointmentTimeMinutes;
   bool completed;
   String note;
 
@@ -67,6 +69,7 @@ class HealthRecord {
       'title': title,
       'type': type.name,
       'date': date.toIso8601String(),
+      'appointmentTimeMinutes': appointmentTimeMinutes,
       'completed': completed,
       'note': note,
     };
@@ -77,6 +80,7 @@ class HealthRecord {
       title: map['title'] as String? ?? '',
       type: _procedureTypeFromName(map['type'] as String?),
       date: DateTime.tryParse(map['date'] as String? ?? '') ?? DateTime.now(),
+      appointmentTimeMinutes: _intFromDynamic(map['appointmentTimeMinutes']),
       completed: map['completed'] as bool? ?? false,
       note: map['note'] as String? ?? '',
     );
@@ -161,6 +165,7 @@ class _RecordDraft {
     required this.type,
     required this.date,
     required this.note,
+    this.appointmentTimeMinutes,
     this.repeatValue,
     this.repeatUnit,
   });
@@ -169,6 +174,7 @@ class _RecordDraft {
   final ProcedureType type;
   final DateTime date;
   final String note;
+  final int? appointmentTimeMinutes;
   final int? repeatValue;
   final RepeatUnit? repeatUnit;
 }
@@ -195,6 +201,43 @@ double? _doubleFromDynamic(dynamic value) {
     return value.toDouble();
   }
   return double.tryParse(value.toString());
+}
+
+int? _intFromDynamic(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  return int.tryParse(value.toString());
+}
+
+int _timeOfDayToMinutes(TimeOfDay time) => time.hour * 60 + time.minute;
+
+TimeOfDay _minutesToTimeOfDay(int minutes) {
+  return TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60);
+}
+
+String _formatAppointmentTime(int minutes) {
+  final time = _minutesToTimeOfDay(minutes);
+  final hour = time.hour.toString().padLeft(2, '0');
+  final minute = time.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
+}
+
+String _formatRecordSchedule(DateTime date, int? appointmentTimeMinutes) {
+  final day = date.day.toString().padLeft(2, '0');
+  final month = date.month.toString().padLeft(2, '0');
+  final year = date.year.toString();
+  final formattedDate = '$day.$month.$year';
+  if (appointmentTimeMinutes == null) {
+    return formattedDate;
+  }
+  return '$formattedDate • ${_formatAppointmentTime(appointmentTimeMinutes)}';
 }
 
 class PetHealthHomePage extends StatefulWidget {
@@ -566,7 +609,10 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
                             Text(_labelForType(record.type)),
                             const Spacer(),
                             Text(
-                              _formatDate(record.date),
+                              _formatRecordSchedule(
+                                record.date,
+                                record.appointmentTimeMinutes,
+                              ),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
                               ),
@@ -733,7 +779,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
                               ),
                               const SizedBox(height: 3),
                               Text(
-                                '${_labelForType(record.type)} • ${_formatDate(record.date)}',
+                                '${_labelForType(record.type)} • ${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}',
                                 style:
                                     Theme.of(context).textTheme.bodySmall,
                               ),
@@ -1430,6 +1476,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
           title: draft.title,
           type: draft.type,
           date: _dateOnly(draft.date),
+          appointmentTimeMinutes: draft.appointmentTimeMinutes,
           note: draft.note,
         ),
       );
@@ -1467,6 +1514,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     final titleController = TextEditingController(text: record.title);
     final noteController = TextEditingController(text: record.note);
     DateTime selectedDate = record.date;
+    int? selectedAppointmentTimeMinutes = record.appointmentTimeMinutes;
     ProcedureType selectedType = record.type;
 
     // Zisti ci uz existuje follow-up zaznam a predvyplni opakovanie
@@ -1546,6 +1594,39 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
                         picked.month,
                         picked.day,
                       );
+                    });
+                  },
+                ),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Zadať čas objednania'),
+                  subtitle: Text(
+                    selectedAppointmentTimeMinutes == null
+                        ? 'Čas nie je zadaný'
+                        : _formatAppointmentTime(
+                            selectedAppointmentTimeMinutes!,
+                          ),
+                  ),
+                  value: selectedAppointmentTimeMinutes != null,
+                  onChanged: (value) async {
+                    if (!value) {
+                      setDialogState(() {
+                        selectedAppointmentTimeMinutes = null;
+                      });
+                      return;
+                    }
+                    final picked = await showTimePicker(
+                      context: context,
+                      initialTime: selectedAppointmentTimeMinutes == null
+                          ? const TimeOfDay(hour: 9, minute: 0)
+                          : _minutesToTimeOfDay(
+                              selectedAppointmentTimeMinutes!,
+                            ),
+                    );
+                    if (picked == null || !context.mounted) return;
+                    setDialogState(() {
+                      selectedAppointmentTimeMinutes =
+                          _timeOfDayToMinutes(picked);
                     });
                   },
                 ),
@@ -1654,6 +1735,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
       record.title = newTitle.isEmpty ? record.title : newTitle;
       record.type = selectedType;
       record.date = _dateOnly(selectedDate);
+      record.appointmentTimeMinutes = selectedAppointmentTimeMinutes;
       record.note = newNote;
 
       _recalculateLinkedRecords(dog, oldTitle, oldDate, record);
@@ -1681,6 +1763,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
             title: followUpTitle,
             type: record.type,
             date: followUpDate,
+            appointmentTimeMinutes: old.appointmentTimeMinutes,
             completed: old.completed,
             note: old.note,
           );
@@ -1734,6 +1817,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
             title: '$prefix${editedRecord.title}',
             type: old.type,
             date: _dateOnly(old.date.add(Duration(days: daysDiff))),
+            appointmentTimeMinutes: old.appointmentTimeMinutes,
             completed: old.completed,
             note: old.note,
           );
@@ -2035,7 +2119,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
               'id': id,
               'title': dog.name,
               'body':
-                  '${record.title} je o ${daysBefore == 1 ? '1 deň' : '7 dní'} (${_formatDate(record.date)}).',
+                  '${record.title} je o ${daysBefore == 1 ? '1 deň' : '7 dní'} (${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}).',
               'timestamp': remindAt.millisecondsSinceEpoch,
             });
           }
@@ -2114,6 +2198,8 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
         return 'Lieky (napr. Cytopoint)';
       case ProcedureType.checkup:
         return 'Veterinárna kontrola';
+      case ProcedureType.grooming:
+        return 'Psí salón';
       case ProcedureType.other:
         return 'Iné';
     }
@@ -2147,6 +2233,8 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
         return Icons.medication;
       case ProcedureType.checkup:
         return Icons.health_and_safety;
+      case ProcedureType.grooming:
+        return Icons.content_cut;
       case ProcedureType.other:
         return Icons.notes;
     }
@@ -3152,6 +3240,7 @@ class _AddRecordPageState extends State<AddRecordPage> {
   bool _repeatEnabled = false;
   RepeatUnit _repeatUnit = RepeatUnit.days;
   late DateTime _selectedDate;
+  int? _selectedAppointmentTimeMinutes;
 
   @override
   void initState() {
@@ -3290,6 +3379,37 @@ class _AddRecordPageState extends State<AddRecordPage> {
             },
           ),
           const SizedBox(height: 12),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Zadať čas objednania'),
+            subtitle: Text(
+              _selectedAppointmentTimeMinutes == null
+                  ? 'Čas nie je zadaný'
+                  : _formatAppointmentTime(_selectedAppointmentTimeMinutes!),
+            ),
+            value: _selectedAppointmentTimeMinutes != null,
+            onChanged: (value) async {
+              if (!value) {
+                setState(() {
+                  _selectedAppointmentTimeMinutes = null;
+                });
+                return;
+              }
+              final picked = await showTimePicker(
+                context: context,
+                initialTime: _selectedAppointmentTimeMinutes == null
+                    ? const TimeOfDay(hour: 9, minute: 0)
+                    : _minutesToTimeOfDay(_selectedAppointmentTimeMinutes!),
+              );
+              if (picked == null || !context.mounted) {
+                return;
+              }
+              setState(() {
+                _selectedAppointmentTimeMinutes = _timeOfDayToMinutes(picked);
+              });
+            },
+          ),
+          const SizedBox(height: 12),
           FilledButton(
             onPressed: () {
               final title = _titleController.text.trim();
@@ -3317,6 +3437,7 @@ class _AddRecordPageState extends State<AddRecordPage> {
                   type: _selectedType,
                   date: _selectedDate,
                   note: _noteController.text.trim(),
+                  appointmentTimeMinutes: _selectedAppointmentTimeMinutes,
                   repeatValue: repeatValue,
                   repeatUnit: repeatUnit,
                 ),
@@ -3339,6 +3460,8 @@ class _AddRecordPageState extends State<AddRecordPage> {
         return 'Lieky (napr. Cytopoint)';
       case ProcedureType.checkup:
         return 'Veterinárna kontrola';
+      case ProcedureType.grooming:
+        return 'Psí salón';
       case ProcedureType.other:
         return 'Iné';
     }
