@@ -282,6 +282,7 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
   Future<void> _initialize() async {
     await _loadStateFromAndroid();
     await _requestNativeNotificationPermission();
+    await _requestExactAlarmPermission();
     await _scheduleNativeNotifications();
     if (!mounted) {
       return;
@@ -2088,6 +2089,12 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     } catch (_) {}
   }
 
+  Future<void> _requestExactAlarmPermission() async {
+    try {
+      await _storageChannel.invokeMethod<void>('requestExactAlarmPermission');
+    } catch (_) {}
+  }
+
   Future<void> _scheduleNativeNotifications() async {
     try {
       final now = DateTime.now();
@@ -2099,13 +2106,27 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
               record.title.startsWith('Pripomienka')) {
             continue;
           }
-          for (final daysBefore in const [7, 1]) {
-            final remindAt = DateTime(
-              record.date.year,
-              record.date.month,
-              record.date.day,
-              9,
-            ).subtract(Duration(days: daysBefore));
+
+          final reminderOffsets = <({int daysBefore, String kind, String body})>[
+            (
+              daysBefore: 3,
+              kind: 'three_days_before',
+              body:
+                  '${record.title} je o 3 dni (${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}).',
+            ),
+            (
+              daysBefore: 1,
+              kind: 'day_before',
+              body:
+                  '${record.title} je zajtra (${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}).',
+            ),
+          ];
+
+          for (final reminder in reminderOffsets) {
+            final remindAt = _reminderDateTime(
+              record,
+              daysBefore: reminder.daysBefore,
+            );
             if (remindAt.isBefore(now)) {
               continue;
             }
@@ -2113,15 +2134,32 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
               dog.id,
               record.title,
               record.date,
-              daysBefore,
+              reminder.kind,
             );
             reminders.add({
               'id': id,
               'title': dog.name,
-              'body':
-                  '${record.title} je o ${daysBefore == 1 ? '1 deň' : '7 dní'} (${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}).',
+              'body': reminder.body,
               'timestamp': remindAt.millisecondsSinceEpoch,
             });
+          }
+
+          if (record.appointmentTimeMinutes != null) {
+            final sameDayAt = _reminderDateTime(record, daysBefore: 0);
+            if (!sameDayAt.isBefore(now)) {
+              final id = _stableReminderId(
+                dog.id,
+                record.title,
+                record.date,
+                'same_day',
+              );
+              reminders.add({
+                'id': id,
+                'title': dog.name,
+                'body': '${record.title} je teraz naplánovaný (${_formatRecordSchedule(record.date, record.appointmentTimeMinutes)}).',
+                'timestamp': sameDayAt.millisecondsSinceEpoch,
+              });
+            }
           }
         }
       }
@@ -2136,15 +2174,30 @@ class _PetHealthHomePageState extends State<PetHealthHomePage> {
     String dogId,
     String title,
     DateTime date,
-    int daysBefore,
+    String reminderKind,
   ) {
-    final source = '$dogId|$title|${date.toIso8601String()}|$daysBefore';
+    final source = '$dogId|$title|${date.toIso8601String()}|$reminderKind';
     var hash = 2166136261;
     for (final unit in source.codeUnits) {
       hash ^= unit;
       hash = (hash * 16777619) & 0x7fffffff;
     }
     return hash;
+  }
+
+  DateTime _reminderDateTime(
+    HealthRecord record, {
+    required int daysBefore,
+  }) {
+    final timeMinutes = record.appointmentTimeMinutes ?? (6 * 60);
+    final reminderBase = record.date.subtract(Duration(days: daysBefore));
+    return DateTime(
+      reminderBase.year,
+      reminderBase.month,
+      reminderBase.day,
+      timeMinutes ~/ 60,
+      timeMinutes % 60,
+    );
   }
 
   Future<void> _loadStateFromAndroid() async {

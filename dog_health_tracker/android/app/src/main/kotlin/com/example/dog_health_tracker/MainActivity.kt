@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -46,6 +47,7 @@ class MainActivity : FlutterActivity() {
                 "saveState" -> handleSaveState(call.arguments as? String, result)
                 "pickDogPhoto" -> handlePickDogPhoto(result)
                 "requestNotificationPermission" -> handleNotificationPermission(result)
+                "requestExactAlarmPermission" -> handleExactAlarmPermission(result)
                 "scheduleNotifications" -> handleScheduleNotifications(call.arguments, result)
                 else -> result.notImplemented()
             }
@@ -112,6 +114,33 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun handleExactAlarmPermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            result.success(true)
+            return
+        }
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (alarmManager.canScheduleExactAlarms()) {
+            result.success(true)
+            return
+        }
+
+        val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+            data = Uri.parse("package:$packageName")
+        }
+        runCatching {
+            startActivity(intent)
+            result.success(false)
+        }.onFailure {
+            result.error(
+                "exact_alarm_permission_failed",
+                "Unable to open exact alarm settings.",
+                null,
+            )
+        }
+    }
+
     private fun handleScheduleNotifications(
         rawArguments: Any?,
         result: MethodChannel.Result,
@@ -162,13 +191,23 @@ class MainActivity : FlutterActivity() {
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                timestamp,
-                pendingIntent,
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                !alarmManager.canScheduleExactAlarms()
+            ) {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    timestamp,
+                    pendingIntent,
+                )
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    timestamp,
+                    pendingIntent,
+                )
+            }
         } else {
-            alarmManager.set(
+            alarmManager.setExact(
                 AlarmManager.RTC_WAKEUP,
                 timestamp,
                 pendingIntent,

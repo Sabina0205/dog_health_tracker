@@ -33,7 +33,7 @@ class ReminderReceiver : BroadcastReceiver() {
         ensureNotificationChannel(manager)
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.paw_clean)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
